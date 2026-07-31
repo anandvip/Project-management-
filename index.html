@@ -1,0 +1,709 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<!--
+  Date created: 2026-07-30
+  Tool: Claude Sonnet 5 (claude.ai)
+  Prompt used: "A working tool that provides the functionality of Kaneo (self-hosted kanban
+  project management). Single-file HTML/CSS/JS. Solo-use focused (no team/notifications
+  overhead): Projects -> Tasks -> Kanban status columns -> Labels -> optional due dates,
+  plus a Someday/Ideas bucket so half-formed ideas don't clutter active boards.
+  localStorage persistence, mobile-first, no external dependencies."
+  Companion file: README.md (in same folder) describes purpose for repo-crawler card grid.
+-->
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flowboard — Project Tracker</title>
+<style>
+  :root{
+    --bg: #14171c;
+    --surface: #1b1f26;
+    --surface-raised: #232833;
+    --line: #2c313c;
+    --text: #e8e6e1;
+    --text-dim: #93999f;
+    --sage: #6fa98a;
+    --sage-dim: #6fa98a33;
+    --amber: #d9a05b;
+    --amber-dim: #d9a05b33;
+    --clay: #c1666b;
+    --clay-dim: #c1666b33;
+    --slate-accent: #7d93b2;
+    --radius: 10px;
+    --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  header{
+    padding: 20px 16px 12px;
+    border-bottom: 1px solid var(--line);
+    position: sticky; top:0; background: var(--bg); z-index: 20;
+  }
+  .brand{
+    font-family: var(--serif);
+    font-size: 1.5rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    display:flex; align-items:baseline; gap:8px;
+  }
+  .brand .mark{ color: var(--sage); font-style: italic; font-size: 1rem;}
+  .subtitle{ color: var(--text-dim); font-size: 0.8rem; margin-top: 2px;}
+
+  /* ---------- Project rail ---------- */
+  .project-rail{
+    display:flex; gap:8px; padding: 14px 16px; overflow-x:auto;
+    border-bottom: 1px solid var(--line);
+    -webkit-overflow-scrolling: touch;
+  }
+  .project-chip{
+    flex: 0 0 auto;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    cursor: pointer;
+    display:flex; align-items:center; gap:8px;
+    white-space: nowrap;
+    transition: border-color .15s, color .15s;
+  }
+  .project-chip.active{
+    border-color: var(--sage);
+    color: var(--text);
+    background: var(--sage-dim);
+  }
+  .ring{
+    width:16px; height:16px; border-radius:50%;
+    background: conic-gradient(var(--sage) calc(var(--pct,0)*1%), var(--line) 0);
+    flex-shrink:0;
+  }
+  .add-project-btn{
+    flex: 0 0 auto;
+    border: 1px dashed var(--line);
+    border-radius: 999px;
+    padding: 8px 14px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    background: transparent;
+    cursor:pointer;
+  }
+
+  main{ padding: 16px; max-width: 1400px; margin: 0 auto; }
+
+  .board-head{
+    display:flex; justify-content:space-between; align-items:flex-end;
+    margin-bottom: 14px; gap: 12px; flex-wrap: wrap;
+  }
+  .board-title{ font-family: var(--serif); font-size: 1.3rem; }
+  .board-meta{ color: var(--text-dim); font-size: 0.78rem; margin-top: 4px;}
+  .btn{
+    background: var(--sage);
+    color: #10221a;
+    border: none;
+    padding: 9px 16px;
+    border-radius: var(--radius);
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .btn-ghost{
+    background: transparent; border: 1px solid var(--line); color: var(--text);
+  }
+  .btn-danger{ background: var(--clay); color: #2a1213; }
+  .btn-small{ padding: 6px 10px; font-size: 0.75rem; }
+
+  .columns{
+    display:grid;
+    grid-template-columns: repeat(4, minmax(240px, 1fr));
+    gap: 12px;
+  }
+  @media (max-width: 900px){
+    .columns{ grid-template-columns: 1fr; }
+  }
+  .column{
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    display:flex; flex-direction:column;
+    min-height: 120px;
+  }
+  .column-head{
+    padding: 10px 12px; display:flex; justify-content:space-between; align-items:center;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-dim);
+  }
+  .column-head .count{
+    background: var(--surface-raised); border-radius: 999px; padding: 1px 8px; font-size: 0.72rem;
+  }
+  .column[data-status="todo"] .column-head{ color: var(--slate-accent); }
+  .column[data-status="doing"] .column-head{ color: var(--amber); }
+  .column[data-status="review"] .column-head{ color: #b78ad9; }
+  .column[data-status="done"] .column-head{ color: var(--sage); }
+
+  .cards{ padding: 8px; display:flex; flex-direction:column; gap: 8px; min-height: 60px; flex:1;}
+  .cards.drag-over{ background: var(--surface-raised); }
+
+  .card{
+    background: var(--surface-raised);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px 12px;
+    cursor: grab;
+    font-size: 0.88rem;
+  }
+  .card:active{ cursor: grabbing; }
+  .card-title{ font-weight: 600; margin-bottom: 6px; line-height:1.3;}
+  .card-meta{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .label-pill{
+    font-size: 0.68rem; padding: 2px 8px; border-radius: 999px;
+    background: var(--slate-accent)33; color: var(--slate-accent); border: 1px solid var(--slate-accent)55;
+  }
+  .due{
+    font-size: 0.7rem; color: var(--text-dim);
+    display:flex; align-items:center; gap:4px;
+  }
+  .due.overdue{ color: var(--clay); font-weight:600; }
+  .card-actions{ margin-top:8px; display:flex; gap:6px; }
+  .icon-btn{
+    background: transparent; border: 1px solid var(--line); color: var(--text-dim);
+    border-radius: 6px; padding: 3px 7px; font-size: 0.72rem; cursor:pointer;
+  }
+  .icon-btn:hover{ color: var(--text); border-color: var(--text-dim); }
+
+  .empty-hint{
+    color: var(--text-dim); font-size: 0.78rem; padding: 16px; text-align:center;
+  }
+
+  /* Someday drawer */
+  .someday-toggle{
+    margin-top: 18px; width: 100%; text-align:left;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 12px 14px; color: var(--text-dim); font-size: 0.85rem; cursor:pointer;
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  .someday-body{
+    background: var(--surface); border: 1px solid var(--line); border-top:none;
+    border-radius: 0 0 var(--radius) var(--radius);
+    padding: 10px; display:none; flex-wrap:wrap; gap:8px;
+  }
+  .someday-body.open{ display:flex; }
+  .someday-item{
+    background: var(--amber-dim); border:1px solid var(--amber); color: var(--text);
+    border-radius: 8px; padding: 8px 10px; font-size: 0.82rem;
+    display:flex; align-items:center; gap:8px;
+  }
+
+  /* Modal */
+  .modal-backdrop{
+    position: fixed; inset:0; background: #000a; display:none;
+    align-items:flex-end; justify-content:center; z-index: 50;
+  }
+  .modal-backdrop.open{ display:flex; }
+  @media (min-width: 640px){ .modal-backdrop{ align-items:center; } }
+  .modal{
+    background: var(--surface-raised); border: 1px solid var(--line);
+    width: 100%; max-width: 480px;
+    border-radius: 14px 14px 0 0;
+    padding: 20px; max-height: 88vh; overflow-y:auto;
+  }
+  @media (min-width: 640px){ .modal{ border-radius: 14px; } }
+  .modal h3{ font-family: var(--serif); margin-bottom: 14px; font-size: 1.15rem;}
+  .field{ margin-bottom: 12px; }
+  .field label{ display:block; font-size: 0.75rem; color: var(--text-dim); margin-bottom: 5px; }
+  .field input[type=text], .field input[type=date], .field select, .field textarea{
+    width:100%; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+    padding: 9px 10px; border-radius: 8px; font-size: 0.9rem; font-family: inherit;
+  }
+  .field textarea{ resize: vertical; min-height: 60px; }
+  .row-2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .modal-actions{ display:flex; justify-content:flex-end; gap:8px; margin-top: 16px; }
+  .modal-actions .btn-danger{ margin-right:auto; }
+  .label-chips{ display:flex; flex-wrap:wrap; gap:6px; }
+  .label-chip-choice{
+    font-size: 0.75rem; padding: 4px 10px; border-radius: 999px; cursor:pointer;
+    border: 1px solid var(--line); color: var(--text-dim); background: transparent;
+  }
+  .label-chip-choice.selected{
+    border-color: var(--sage); color: var(--sage); background: var(--sage-dim);
+  }
+
+  .toast{
+    position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%);
+    background: var(--surface-raised); border: 1px solid var(--sage); color: var(--text);
+    padding: 9px 16px; border-radius: 999px; font-size: 0.82rem; z-index: 60;
+    opacity: 0; pointer-events:none; transition: opacity .2s;
+  }
+  .toast.show{ opacity: 1; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span>Flowboard</span><span class="mark">for one</span></div>
+  <div class="subtitle">Projects → tasks → flow. No teammates required.</div>
+</header>
+
+<div class="project-rail" id="projectRail"></div>
+
+<main>
+  <div class="board-head">
+    <div>
+      <div class="board-title" id="boardTitle">—</div>
+      <div class="board-meta" id="boardMeta"></div>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button class="btn btn-ghost btn-small" id="manageLabelsBtn">Labels</button>
+      <button class="btn" id="newTaskBtn">+ New task</button>
+    </div>
+  </div>
+
+  <div class="columns" id="columns">
+    <div class="column" data-status="todo">
+      <div class="column-head"><span>To Do</span><span class="count" id="count-todo">0</span></div>
+      <div class="cards" data-status="todo" id="cards-todo"></div>
+    </div>
+    <div class="column" data-status="doing">
+      <div class="column-head"><span>In Progress</span><span class="count" id="count-doing">0</span></div>
+      <div class="cards" data-status="doing" id="cards-doing"></div>
+    </div>
+    <div class="column" data-status="review">
+      <div class="column-head"><span>In Review</span><span class="count" id="count-review">0</span></div>
+      <div class="cards" data-status="review" id="cards-review"></div>
+    </div>
+    <div class="column" data-status="done">
+      <div class="column-head"><span>Done</span><span class="count" id="count-done">0</span></div>
+      <div class="cards" data-status="done" id="cards-done"></div>
+    </div>
+  </div>
+
+  <button class="someday-toggle" id="somedayToggle">
+    <span>💡 Someday / Ideas <span id="somedayCount" style="color:var(--amber)"></span></span>
+    <span id="somedayCaret">▾</span>
+  </button>
+  <div class="someday-body" id="somedayBody"></div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<!-- Task modal -->
+<div class="modal-backdrop" id="taskModalBackdrop">
+  <div class="modal">
+    <h3 id="taskModalTitle">New task</h3>
+    <div class="field">
+      <label>Title</label>
+      <input type="text" id="taskTitleInput" placeholder="e.g. Add senior citizen rate table">
+    </div>
+    <div class="field">
+      <label>Notes (optional)</label>
+      <textarea id="taskNotesInput" placeholder="Context, links, next step..."></textarea>
+    </div>
+    <div class="row-2">
+      <div class="field">
+        <label>Status</label>
+        <select id="taskStatusInput">
+          <option value="someday">Someday / Idea</option>
+          <option value="todo">To Do</option>
+          <option value="doing">In Progress</option>
+          <option value="review">In Review</option>
+          <option value="done">Done</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Due date (optional)</label>
+        <input type="date" id="taskDueInput">
+      </div>
+    </div>
+    <div class="field">
+      <label>Labels</label>
+      <div class="label-chips" id="taskLabelChips"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-danger btn-small" id="deleteTaskBtn" style="display:none;">Delete</button>
+      <button class="btn btn-ghost btn-small" id="cancelTaskBtn">Cancel</button>
+      <button class="btn btn-small" id="saveTaskBtn">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Project modal -->
+<div class="modal-backdrop" id="projectModalBackdrop">
+  <div class="modal">
+    <h3>New project</h3>
+    <div class="field">
+      <label>Project name</label>
+      <input type="text" id="projectNameInput" placeholder="e.g. FD Investment Calculator v2">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost btn-small" id="cancelProjectBtn">Cancel</button>
+      <button class="btn btn-small" id="saveProjectBtn">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Labels modal -->
+<div class="modal-backdrop" id="labelsModalBackdrop">
+  <div class="modal">
+    <h3>Manage labels</h3>
+    <div class="field">
+      <label>Add a label</label>
+      <div style="display:flex; gap:8px;">
+        <input type="text" id="newLabelInput" placeholder="e.g. research, bug, client-facing">
+        <button class="btn btn-small" id="addLabelBtn">Add</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Existing labels (tap to remove)</label>
+      <div class="label-chips" id="existingLabelChips"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-small" id="closeLabelsBtn">Done</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const STORE_KEY = 'flowboard_data_v1';
+  const STATUSES = ['todo','doing','review','done'];
+
+  function uid(){ return Math.random().toString(36).slice(2,9); }
+
+  function loadData(){
+    try{
+      const raw = localStorage.getItem(STORE_KEY);
+      if(!raw) return seedData();
+      return JSON.parse(raw);
+    }catch(e){
+      console.error('Flowboard: failed to load, reseeding', e);
+      return seedData();
+    }
+  }
+
+  function seedData(){
+    const pid = uid();
+    return {
+      activeProjectId: pid,
+      projects: [{ id: pid, name: 'My first project', createdAt: Date.now() }],
+      labels: ['research','build','fix'],
+      tasks: [
+        { id: uid(), projectId: pid, title: 'Welcome — drag me between columns', notes: 'Try dragging this card, or tap it to edit.', status: 'todo', due: '', labels: [], createdAt: Date.now() },
+        { id: uid(), projectId: pid, title: 'This is a Someday idea', notes: '', status: 'someday', due: '', labels: [], createdAt: Date.now() }
+      ]
+    };
+  }
+
+  let data = loadData();
+
+  function save(){
+    try{
+      localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    }catch(e){
+      console.error('Flowboard: save failed', e);
+      showToast('⚠ Could not save — storage may be full');
+    }
+  }
+
+  function showToast(msg){
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(()=> t.classList.remove('show'), 1800);
+  }
+
+  function activeProject(){
+    return data.projects.find(p => p.id === data.activeProjectId) || data.projects[0];
+  }
+
+  function tasksFor(projectId){
+    return data.tasks.filter(t => t.projectId === projectId);
+  }
+
+  // ---------- Rendering ----------
+  function renderProjectRail(){
+    const rail = document.getElementById('projectRail');
+    rail.innerHTML = '';
+    data.projects.forEach(p => {
+      const ts = tasksFor(p.id);
+      const doneCt = ts.filter(t => t.status==='done').length;
+      const trackable = ts.filter(t => t.status !== 'someday').length;
+      const pct = trackable ? Math.round((doneCt/trackable)*100) : 0;
+
+      const chip = document.createElement('div');
+      chip.className = 'project-chip' + (p.id === data.activeProjectId ? ' active' : '');
+      chip.innerHTML = `<span class="ring" style="--pct:${pct}"></span><span>${escapeHtml(p.name)}</span>`;
+      chip.onclick = () => { data.activeProjectId = p.id; save(); renderAll(); };
+      rail.appendChild(chip);
+    });
+    const addBtn = document.createElement('button');
+    addBtn.className = 'add-project-btn';
+    addBtn.textContent = '+ Project';
+    addBtn.onclick = openProjectModal;
+    rail.appendChild(addBtn);
+  }
+
+  function fmtDue(due){
+    if(!due) return '';
+    const d = new Date(due + 'T00:00:00');
+    const today = new Date(); today.setHours(0,0,0,0);
+    const overdue = d < today;
+    const label = d.toLocaleDateString(undefined, { month:'short', day:'numeric' });
+    return `<span class="due ${overdue?'overdue':''}">${overdue?'⚠':'📅'} ${label}</span>`;
+  }
+
+  function escapeHtml(s){
+    return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  function renderBoard(){
+    const proj = activeProject();
+    if(!proj){ return; }
+    document.getElementById('boardTitle').textContent = proj.name;
+    const all = tasksFor(proj.id);
+    const active = all.filter(t => t.status !== 'someday');
+    const done = active.filter(t=>t.status==='done').length;
+    document.getElementById('boardMeta').textContent =
+      `${active.length} active task${active.length===1?'':'s'} · ${done} done`;
+
+    STATUSES.forEach(status => {
+      const list = all.filter(t => t.status === status);
+      document.getElementById('count-'+status).textContent = list.length;
+      const container = document.getElementById('cards-'+status);
+      container.innerHTML = '';
+      if(list.length === 0){
+        container.innerHTML = `<div class="empty-hint">Nothing here</div>`;
+      }
+      list.sort((a,b)=> (a.due||'9999').localeCompare(b.due||'9999'));
+      list.forEach(t => container.appendChild(renderCard(t)));
+    });
+
+    // Someday
+    const somedayItems = all.filter(t => t.status === 'someday');
+    document.getElementById('somedayCount').textContent = somedayItems.length ? `(${somedayItems.length})` : '';
+    const sBody = document.getElementById('somedayBody');
+    sBody.innerHTML = '';
+    if(somedayItems.length === 0){
+      sBody.innerHTML = `<div class="empty-hint">No parked ideas yet</div>`;
+    }
+    somedayItems.forEach(t => {
+      const el = document.createElement('div');
+      el.className = 'someday-item';
+      el.innerHTML = `<span>${escapeHtml(t.title)}</span>`;
+      const promote = document.createElement('button');
+      promote.className = 'icon-btn';
+      promote.textContent = '→ To Do';
+      promote.onclick = (e) => { e.stopPropagation(); t.status='todo'; save(); renderAll(); showToast('Moved to To Do'); };
+      el.appendChild(promote);
+      el.onclick = () => openTaskModal(t);
+      sBody.appendChild(el);
+    });
+  }
+
+  function renderCard(t){
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.draggable = true;
+    card.dataset.id = t.id;
+    const labelsHtml = (t.labels||[]).map(l => `<span class="label-pill">${escapeHtml(l)}</span>`).join('');
+    card.innerHTML = `
+      <div class="card-title">${escapeHtml(t.title)}</div>
+      <div class="card-meta">${labelsHtml}${fmtDue(t.due)}</div>
+    `;
+    card.addEventListener('click', () => openTaskModal(t));
+    card.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', t.id);
+      setTimeout(()=> card.style.opacity='0.4', 0);
+    });
+    card.addEventListener('dragend', () => card.style.opacity='1');
+    return card;
+  }
+
+  function renderAll(){
+    renderProjectRail();
+    renderBoard();
+  }
+
+  // ---------- Drag and drop on columns ----------
+  document.querySelectorAll('.cards').forEach(col => {
+    col.addEventListener('dragover', (e) => { e.preventDefault(); col.classList.add('drag-over'); });
+    col.addEventListener('dragleave', () => col.classList.remove('drag-over'));
+    col.addEventListener('drop', (e) => {
+      e.preventDefault();
+      col.classList.remove('drag-over');
+      const id = e.dataTransfer.getData('text/plain');
+      const task = data.tasks.find(t => t.id === id);
+      if(task){
+        task.status = col.dataset.status;
+        save();
+        renderAll();
+      }
+    });
+  });
+
+  // ---------- Someday drawer toggle ----------
+  document.getElementById('somedayToggle').onclick = () => {
+    const body = document.getElementById('somedayBody');
+    const caret = document.getElementById('somedayCaret');
+    body.classList.toggle('open');
+    caret.textContent = body.classList.contains('open') ? '▴' : '▾';
+  };
+
+  // ---------- Task modal ----------
+  let editingTaskId = null;
+  let selectedLabels = [];
+
+  function openTaskModal(task){
+    editingTaskId = task ? task.id : null;
+    selectedLabels = task ? [...(task.labels||[])] : [];
+    document.getElementById('taskModalTitle').textContent = task ? 'Edit task' : 'New task';
+    document.getElementById('taskTitleInput').value = task ? task.title : '';
+    document.getElementById('taskNotesInput').value = task ? (task.notes||'') : '';
+    document.getElementById('taskStatusInput').value = task ? task.status : 'todo';
+    document.getElementById('taskDueInput').value = task ? (task.due||'') : '';
+    document.getElementById('deleteTaskBtn').style.display = task ? 'inline-block' : 'none';
+    renderLabelChips();
+    document.getElementById('taskModalBackdrop').classList.add('open');
+    document.getElementById('taskTitleInput').focus();
+  }
+  function closeTaskModal(){
+    document.getElementById('taskModalBackdrop').classList.remove('open');
+    editingTaskId = null;
+  }
+
+  function renderLabelChips(){
+    const wrap = document.getElementById('taskLabelChips');
+    wrap.innerHTML = '';
+    if(data.labels.length === 0){
+      wrap.innerHTML = `<span style="color:var(--text-dim); font-size:0.8rem;">No labels yet — add some in the Labels panel</span>`;
+    }
+    data.labels.forEach(l => {
+      const chip = document.createElement('button');
+      chip.type='button';
+      chip.className = 'label-chip-choice' + (selectedLabels.includes(l) ? ' selected' : '');
+      chip.textContent = l;
+      chip.onclick = () => {
+        if(selectedLabels.includes(l)) selectedLabels = selectedLabels.filter(x=>x!==l);
+        else selectedLabels.push(l);
+        renderLabelChips();
+      };
+      wrap.appendChild(chip);
+    });
+  }
+
+  document.getElementById('newTaskBtn').onclick = () => openTaskModal(null);
+  document.getElementById('cancelTaskBtn').onclick = closeTaskModal;
+  document.getElementById('taskModalBackdrop').addEventListener('click', (e) => {
+    if(e.target.id === 'taskModalBackdrop') closeTaskModal();
+  });
+
+  document.getElementById('saveTaskBtn').onclick = () => {
+    const title = document.getElementById('taskTitleInput').value.trim();
+    if(!title){ showToast('Give the task a title first'); return; }
+    const status = document.getElementById('taskStatusInput').value;
+    const due = document.getElementById('taskDueInput').value;
+    const notes = document.getElementById('taskNotesInput').value.trim();
+
+    if(editingTaskId){
+      const t = data.tasks.find(x=>x.id===editingTaskId);
+      Object.assign(t, { title, status, due, notes, labels: [...selectedLabels] });
+    } else {
+      data.tasks.push({
+        id: uid(), projectId: activeProject().id, title, status, due, notes,
+        labels: [...selectedLabels], createdAt: Date.now()
+      });
+    }
+    save();
+    closeTaskModal();
+    renderAll();
+    showToast('Saved');
+  };
+
+  document.getElementById('deleteTaskBtn').onclick = () => {
+    if(!editingTaskId) return;
+    data.tasks = data.tasks.filter(t => t.id !== editingTaskId);
+    save();
+    closeTaskModal();
+    renderAll();
+    showToast('Task deleted');
+  };
+
+  // ---------- Project modal ----------
+  function openProjectModal(){
+    document.getElementById('projectNameInput').value = '';
+    document.getElementById('projectModalBackdrop').classList.add('open');
+    document.getElementById('projectNameInput').focus();
+  }
+  document.getElementById('cancelProjectBtn').onclick = () =>
+    document.getElementById('projectModalBackdrop').classList.remove('open');
+  document.getElementById('projectModalBackdrop').addEventListener('click', (e) => {
+    if(e.target.id === 'projectModalBackdrop') e.currentTarget.classList.remove('open');
+  });
+  document.getElementById('saveProjectBtn').onclick = () => {
+    const name = document.getElementById('projectNameInput').value.trim();
+    if(!name){ showToast('Give the project a name'); return; }
+    const p = { id: uid(), name, createdAt: Date.now() };
+    data.projects.push(p);
+    data.activeProjectId = p.id;
+    save();
+    document.getElementById('projectModalBackdrop').classList.remove('open');
+    renderAll();
+    showToast('Project created');
+  };
+
+  // ---------- Labels modal ----------
+  document.getElementById('manageLabelsBtn').onclick = () => {
+    renderExistingLabels();
+    document.getElementById('labelsModalBackdrop').classList.add('open');
+  };
+  document.getElementById('closeLabelsBtn').onclick = () => {
+    document.getElementById('labelsModalBackdrop').classList.remove('open');
+    renderAll();
+  };
+  document.getElementById('labelsModalBackdrop').addEventListener('click', (e) => {
+    if(e.target.id === 'labelsModalBackdrop') e.currentTarget.classList.remove('open');
+  });
+  document.getElementById('addLabelBtn').onclick = () => {
+    const input = document.getElementById('newLabelInput');
+    const val = input.value.trim();
+    if(!val) return;
+    if(data.labels.includes(val)){ showToast('Label already exists'); return; }
+    data.labels.push(val);
+    input.value = '';
+    save();
+    renderExistingLabels();
+  };
+  function renderExistingLabels(){
+    const wrap = document.getElementById('existingLabelChips');
+    wrap.innerHTML = '';
+    if(data.labels.length === 0){
+      wrap.innerHTML = `<span style="color:var(--text-dim); font-size:0.8rem;">No labels yet</span>`;
+    }
+    data.labels.forEach(l => {
+      const chip = document.createElement('button');
+      chip.type='button';
+      chip.className = 'label-chip-choice';
+      chip.textContent = l + ' ✕';
+      chip.onclick = () => {
+        data.labels = data.labels.filter(x=>x!==l);
+        data.tasks.forEach(t => { t.labels = (t.labels||[]).filter(x=>x!==l); });
+        save();
+        renderExistingLabels();
+      };
+      wrap.appendChild(chip);
+    });
+  }
+
+  // ---------- Init ----------
+  renderAll();
+})();
+</script>
+</body>
+</html>
